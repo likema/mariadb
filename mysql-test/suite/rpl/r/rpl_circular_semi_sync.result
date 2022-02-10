@@ -1,0 +1,67 @@
+include/master-slave.inc
+[connection master]
+# Master server_1 and Slave server_2 initialiation ...
+connection server_2;
+include/stop_slave.inc
+connection server_1;
+RESET MASTER;
+set @@session.gtid_domain_id=10;
+set @@global.rpl_semi_sync_master_enabled = 1;
+set @@global.rpl_semi_sync_master_wait_point=AFTER_SYNC;
+connection server_2;
+RESET MASTER;
+ALTER TABLE mysql.gtid_slave_pos ENGINE=InnoDB;
+set @@session.gtid_domain_id=20;
+set @@global.rpl_semi_sync_slave_enabled = 1;
+set @@global.gtid_slave_pos = "";
+Warnings:
+Warning	1948	Specified value for @@gtid_slave_pos contains no value for replication domain 0. This conflicts with the binary log which contains GTID 0-2-1. If MASTER_GTID_POS=CURRENT_POS is used, the binlog position will override the new value of @@gtid_slave_pos
+CHANGE MASTER TO master_use_gtid= slave_pos;
+include/start_slave.inc
+# ... server_1 -> server_2 is set up
+connection server_1;
+CREATE TABLE t1 (a INT PRIMARY KEY) ENGINE=Innodb;
+INSERT INTO t1 VALUES (1);
+connection server_2;
+# Cirular configuration server_2 -> server_1 initialiation ...
+connection server_1;
+set @@global.gtid_slave_pos = "";
+Warnings:
+Warning	1948	Specified value for @@gtid_slave_pos contains no value for replication domain 10. This conflicts with the binary log which contains GTID 10-1-2. If MASTER_GTID_POS=CURRENT_POS is used, the binlog position will override the new value of @@gtid_slave_pos
+set @@global.rpl_semi_sync_slave_enabled = 1;
+set @@global.rpl_semi_sync_master_wait_point=AFTER_SYNC;
+CHANGE MASTER TO master_host='127.0.0.1', master_port=$SERVER_MYPORT_2, master_user='root', master_use_gtid=SLAVE_POS;
+include/start_slave.inc
+# ... is completed.
+connection server_2;
+INSERT INTO t1 VALUES (2);
+connection server_1;
+INSERT INTO t1 VALUES (3);
+connection server_2;
+# The gtid state on server_2 must be equal to ...
+SHOW VARIABLES LIKE 'gtid_binlog_pos';
+Variable_name	Value
+gtid_binlog_pos	0-2-1,10-1-3,20-2-1
+SHOW VARIABLES LIKE 'gtid_slave_pos';
+Variable_name	Value
+gtid_slave_pos	0-2-1,10-1-3,20-2-1
+connection server_1;
+# ... the gtid states on server_1
+SHOW VARIABLES LIKE 'gtid_slave_pos';
+Variable_name	Value
+gtid_slave_pos	0-2-1,10-1-3,20-2-1
+SHOW VARIABLES LIKE 'gtid_binlog_pos';
+Variable_name	Value
+gtid_binlog_pos	0-2-1,10-1-3,20-2-1
+include/diff_tables.inc [server_1:t1, server_2:t1]
+# Cleanup
+connection server_1;
+include/stop_slave.inc
+set @@global.rpl_semi_sync_master_enabled = default;
+set @@global.rpl_semi_sync_slave_enabled = default;
+set @@global.rpl_semi_sync_master_wait_point=default;
+DROP TABLE t1;
+connection server_2;
+set @@global.rpl_semi_sync_master_enabled = default;
+set @@global.rpl_semi_sync_slave_enabled = default;
+include/rpl_end.inc

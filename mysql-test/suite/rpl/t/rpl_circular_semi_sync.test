@@ -1,0 +1,102 @@
+# ==== References ====
+#
+# MDEV-27760 event may non stop replicate in circular semisync setup
+#
+--source include/have_innodb.inc
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+--source include/have_binlog_format_row.inc
+--source include/master-slave.inc
+
+# The following block proves no replication flow disruption and consistency
+# in circular semisync setup.
+
+--echo # Master server_1 and Slave server_2 initialiation ...
+--connection server_2
+--source include/stop_slave.inc
+
+# Initial master
+--connection server_1
+RESET MASTER;
+
+set @@session.gtid_domain_id=10;
+
+set @@global.rpl_semi_sync_master_enabled = 1;
+set @@global.rpl_semi_sync_master_wait_point=AFTER_SYNC;
+
+--connection server_2
+RESET MASTER;
+ALTER TABLE mysql.gtid_slave_pos ENGINE=InnoDB;
+
+set @@session.gtid_domain_id=20;
+
+set @@global.rpl_semi_sync_slave_enabled = 1;
+set @@global.gtid_slave_pos = "";
+CHANGE MASTER TO master_use_gtid= slave_pos;
+--source include/start_slave.inc
+--echo # ... server_1 -> server_2 is set up
+
+
+--connection server_1
+CREATE TABLE t1 (a INT PRIMARY KEY) ENGINE=Innodb;
+INSERT INTO t1 VALUES (1);
+--save_master_pos
+
+--connection server_2
+--sync_with_master
+
+--echo # Cirular configuration server_2 -> server_1 initialiation ...
+--connection server_1
+
+# While server_1 possesses a valid non-trivial (non-empty gtid_binlog_pos) gtid state
+# setup a wild initial state corresponding the bug case.
+set @@global.gtid_slave_pos = "";
+set @@global.rpl_semi_sync_slave_enabled = 1;
+set @@global.rpl_semi_sync_master_wait_point=AFTER_SYNC;
+
+evalp CHANGE MASTER TO master_host='127.0.0.1', master_port=$SERVER_MYPORT_2, master_user='root', master_use_gtid=SLAVE_POS;
+--source include/start_slave.inc
+--echo # ... is completed.
+
+--connection server_2
+INSERT INTO t1 VALUES (2);
+--save_master_pos
+
+--connection server_1
+--sync_with_master
+
+INSERT INTO t1 VALUES (3);
+--save_master_pos
+
+
+--connection server_2
+--sync_with_master
+--echo # The gtid state on server_2 must be equal to ...
+SHOW VARIABLES LIKE 'gtid_binlog_pos';
+SHOW VARIABLES LIKE 'gtid_slave_pos';
+
+--connection server_1
+--echo # ... the gtid states on server_1
+SHOW VARIABLES LIKE 'gtid_slave_pos';
+SHOW VARIABLES LIKE 'gtid_binlog_pos';
+
+
+--let $diff_tables=server_1:t1, server_2:t1
+--source include/diff_tables.inc
+
+--echo # Cleanup
+--connection server_1
+--source include/stop_slave.inc
+set @@global.rpl_semi_sync_master_enabled = default;
+set @@global.rpl_semi_sync_slave_enabled = default;
+set @@global.rpl_semi_sync_master_wait_point=default;
+
+DROP TABLE t1;
+--save_master_pos
+
+--connection server_2
+--sync_with_master
+set @@global.rpl_semi_sync_master_enabled = default;
+set @@global.rpl_semi_sync_slave_enabled = default;
+
+--source include/rpl_end.inc
