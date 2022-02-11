@@ -435,8 +435,7 @@ EOF
                     tar_type=0
                     if tar --help | grep -qw -F -- '--transform'; then
                         tar_type=1
-                    elif tar --help | grep -qw -E -- '-s[[:space:]]pattern'
-                    then
+                    elif tar --help | grep -qw -F 'tar(bsdtar):'; then
                         tar_type=2
                     fi
                     if [ $tar_type -ne 0 ]; then
@@ -840,8 +839,8 @@ EOF
             binlog_cd=0
             if [ -n "$binlog_dir" -a "$binlog_dir" != '.' ]; then
                 [ ! -d "$binlog_dir" ] && mkdir -p "$binlog_dir"
-                cd "$binlog_dir"
                 binlog_cd=1
+                cd "$binlog_dir"
             fi
             # Extracting binlog files:
             wsrep_log_info "Extracting binlog files:"
@@ -852,7 +851,10 @@ EOF
             fi
             # Rebuild binlog index:
             [ $binlog_cd -ne 0 ] && cd "$DATA_DIR"
+            bsd_tar=0
+            tar --help | grep -qw -F 'tar(bsdtar):' && bsd_tar=1
             while read bin_file || [ -n "$bin_file" ]; do
+                [ $bsd_tar -eq 1 ] && bin_file="${bin_file#??}"
                 echo "$binlog_dir${binlog_dir:+/}$bin_file" >> "$binlog_index"
             done < "$tmpfile"
             rm -f "$tmpfile"
